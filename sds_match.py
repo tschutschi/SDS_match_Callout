@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Stage 1: Excel einlesen, Zeilen als SDS/Callout klassifizieren,
 PLZ/Straße/Ort aus dem Freitext extrahieren."""
 
