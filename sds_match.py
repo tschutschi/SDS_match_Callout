@@ -22,15 +22,15 @@ import pandas as pd
 CALLOUT_PREFIX = "IncomingCallout:"
 
 # ----- gemeinsame Regex (von mehreren Extraktoren genutzt) -----
-PLZ_RE = re.compile(r"\b(82\d{3})\b")
+PLZ_RE = re.compile(r"\b(8(2|3)\d{3})\b")
 STREET_END_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*\s+\d+\s*[a-zA-Z]?)\s*$"
 )
 CITY_START_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*)"
 )
-SCHLAGWORT_CALLOUT_RE = re.compile(r"\|(#[TBI]\d{4}[a-zA-Z#\W]*)\|")
-SCHLAGWORT_SDS_RE = re.compile(r"\|SW:([BTI]#[^|]*)\|")
+SCHLAGWORT_CALLOUT_RE = re.compile(r"\|(#[TBIR]\d{4}[a-zA-ZÖöÄäß#\-\ ]*)\|+")
+SCHLAGWORT_SDS_RE = re.compile(r"\|+SW: (#[BTIR]\d{4}[a-zA-ZÖöÄäß#\-\ ]*)\|+")
 
 
 # ============================================================
@@ -212,13 +212,38 @@ def main() -> None:
     print(f"Aktive Suchmuster: {', '.join(e.name for e in active)}\n")
 
     limit = len(records) if args.limit < 0 else args.limit
-    for r in records[:limit]:
+    shown = records[:limit]
+    for r in shown:
         ts = r.timestamp.isoformat(sep=" ", timespec="milliseconds") if r.timestamp else "-"
         parts = [f"{name}={r.fields.get(name) or '-'!r}" for name in (e.name for e in active)]
         line = f"[{r.kind:7s}] {ts}  " + "  ".join(parts)
         if args.show_content:
             line += f"\n           {r.content}"
         print(line)
+    if len(records) > len(shown):
+        print(f"... ({len(records) - len(shown)} weitere Zeilen — mit --limit -1 alle anzeigen)")
+
+    # ----- Statistik je Suchmuster, getrennt nach SDS/Callout -----
+    print("\nMatch-Statistik (pro Suchmuster):")
+    print(f"  {'Muster':12s}  {'Callout':>14s}  {'SDS':>14s}  {'Gesamt':>14s}")
+    for e in active:
+        co_hit = sum(1 for r in records if r.kind == "callout" and r.fields.get(e.name))
+        sds_hit = sum(1 for r in records if r.kind == "sds"     and r.fields.get(e.name))
+        total_hit = co_hit + sds_hit
+        co_str  = f"{co_hit}/{n_co}"  if n_co  else "-"
+        sds_str = f"{sds_hit}/{n_sds}" if n_sds else "-"
+        tot_str = f"{total_hit}/{len(records)}"
+        print(f"  {e.name:12s}  {co_str:>14s}  {sds_str:>14s}  {tot_str:>14s}")
+
+    # ----- Records ohne jeden Match (Hinweis fuer Regex-Tuning) -----
+    no_match = [r for r in records if not any(r.fields.values())]
+    if no_match:
+        print(f"\n{len(no_match)} Datensätze ohne irgendeinen Treffer:")
+        for r in no_match[:10]:
+            ts = r.timestamp.isoformat(sep=" ", timespec="milliseconds") if r.timestamp else "-"
+            print(f"  [{r.kind:7s}] {ts}  {r.content[:120]}")
+        if len(no_match) > 10:
+            print(f"  ... ({len(no_match) - 10} weitere)")
 
 
 if __name__ == "__main__":
