@@ -1,43 +1,51 @@
 #!/usr/bin/env python3
 """Stage 1: Excel einlesen, Zeilen als SDS/Callout klassifizieren,
-PLZ/Straße/Ort aus dem Freitext extrahieren."""
+und konfigurierbare Suchmuster auf den Inhalt anwenden.
+
+Neue Suchmuster:
+  1. Funktion definieren: extract_<name>(content: str, kind: str) -> str | None
+  2. In EXTRACTORS-Liste am Ende der Datei eintragen
+  3. Fertig — taucht automatisch in --list, --only, --skip und Output auf
+"""
 
 from __future__ import annotations
 
 import argparse
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 
 CALLOUT_PREFIX = "IncomingCallout:"
 
-# PLZen in unserem Gebiet beginnen mit 82
+# ----- gemeinsame Regex (von mehreren Extraktoren genutzt) -----
 PLZ_RE = re.compile(r"\b(82\d{3})\b")
-
-# Straßenname + Hausnummer (optional Buchstaben-Zusatz wie 12a)
 STREET_END_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*\s+\d+\s*[a-zA-Z]?)\s*$"
 )
-# Ortsname direkt nach der PLZ
 CITY_START_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*)"
 )
-
-# Schlagwort: zwischen zwei Pipes, beginnt mit B/T/I + '#'.
-# Callout: |B#...|   SDS: |SW:B#...|
 SCHLAGWORT_CALLOUT_RE = re.compile(r"\|([BTI]#[^|]*)\|")
 SCHLAGWORT_SDS_RE = re.compile(r"\|SW:([BTI]#[^|]*)\|")
 
 
+# ============================================================
+#  Extractor-Framework
+# ============================================================
+
+ExtractFn = Callable[[str, str], str | None]
+
+
 @dataclass
-class Address:
-    raw: str
-    plz: str | None
-    street: str | None
-    city: str | None
+class Extractor:
+    name: str
+    func: ExtractFn
+    description: str = ""
+    enabled: bool = True
 
 
 @dataclass
@@ -45,38 +53,67 @@ class Record:
     timestamp: datetime | None
     kind: str  # "callout" | "sds"
     content: str
-    address: Address
-    schlagwort: str | None
+    fields: dict[str, str | None] = field(default_factory=dict)
 
 
 def classify(content: str) -> str:
     return "callout" if content.lstrip().startswith(CALLOUT_PREFIX) else "sds"
 
 
-def parse_schlagwort(content: str, kind: str) -> str | None:
+# ============================================================
+#  Einzelne Suchmuster (Extraktoren)
+# ============================================================
+
+def extract_plz(content: str, kind: str) -> str | None:
+    m = PLZ_RE.search(content)
+    return m.group(1) if m else None
+
+
+def extract_street(content: str, kind: str) -> str | None:
+    text = " ".join(content.split())
+    plz_match = PLZ_RE.search(text)
+    if not plz_match:
+        return None
+    before = text[: plz_match.start()].rstrip(" ,;:-")
+    m = STREET_END_RE.search(before)
+    return m.group(1).strip() if m else None
+
+
+def extract_city(content: str, kind: str) -> str | None:
+    text = " ".join(content.split())
+    plz_match = PLZ_RE.search(text)
+    if not plz_match:
+        return None
+    after = text[plz_match.end() :].lstrip(" ,;:-")
+    m = CITY_START_RE.match(after)
+    return m.group(1).strip() if m else None
+
+
+def extract_schlagwort(content: str, kind: str) -> str | None:
     pattern = SCHLAGWORT_SDS_RE if kind == "sds" else SCHLAGWORT_CALLOUT_RE
     m = pattern.search(content)
     return m.group(1) if m else None
 
 
-def parse_address(content: str) -> Address:
-    text = " ".join(content.split())
-    plz_match = PLZ_RE.search(text)
-    if not plz_match:
-        return Address(raw=content, plz=None, street=None, city=None)
+# ============================================================
+#  Registry — hier neue Suchmuster eintragen
+# ============================================================
 
-    plz = plz_match.group(1)
-    before = text[: plz_match.start()].rstrip(" ,;:-")
-    after = text[plz_match.end() :].lstrip(" ,;:-")
+EXTRACTORS: list[Extractor] = [
+    Extractor("plz",        extract_plz,        "Postleitzahl (82xxx)"),
+    Extractor("street",     extract_street,     "Straße + Hausnummer vor der PLZ"),
+    Extractor("city",       extract_city,       "Ortsname nach der PLZ"),
+    Extractor("schlagwort", extract_schlagwort, "Schlagwort zwischen Pipes (B#/T#/I#)"),
+]
 
-    street_match = STREET_END_RE.search(before)
-    street = street_match.group(1).strip() if street_match else None
 
-    city_match = CITY_START_RE.match(after)
-    city = city_match.group(1).strip() if city_match else None
+def apply_extractors(content: str, kind: str, extractors: list[Extractor]) -> dict[str, str | None]:
+    return {e.name: e.func(content, kind) for e in extractors if e.enabled}
 
-    return Address(raw=content, plz=plz, street=street, city=city)
 
+# ============================================================
+#  Excel laden
+# ============================================================
 
 def parse_timestamp(date_val, time_val) -> datetime | None:
     if pd.isna(date_val) or pd.isna(time_val):
@@ -91,7 +128,11 @@ def parse_timestamp(date_val, time_val) -> datetime | None:
     return None
 
 
-def load_records(xlsx_path: Path, sheet: str | int = 0) -> list[Record]:
+def load_records(
+    xlsx_path: Path,
+    sheet: str | int,
+    extractors: list[Extractor],
+) -> list[Record]:
     df = pd.read_excel(xlsx_path, sheet_name=sheet, header=None, dtype=str)
     df = df.iloc[:, :3]
     df.columns = ["date", "time", "content"]
@@ -107,34 +148,77 @@ def load_records(xlsx_path: Path, sheet: str | int = 0) -> list[Record]:
                 timestamp=parse_timestamp(row["date"], row["time"]),
                 kind=kind,
                 content=content,
-                address=parse_address(content),
-                schlagwort=parse_schlagwort(content, kind),
+                fields=apply_extractors(content, kind, extractors),
             )
         )
     return records
 
 
+# ============================================================
+#  CLI
+# ============================================================
+
+def configure_extractors(only: str | None, skip: str | None) -> list[Extractor]:
+    names = {e.name for e in EXTRACTORS}
+
+    if only:
+        wanted = {n.strip() for n in only.split(",") if n.strip()}
+        unknown = wanted - names
+        if unknown:
+            raise SystemExit(f"Unbekannte Suchmuster: {sorted(unknown)}. Verfügbar: {sorted(names)}")
+        for e in EXTRACTORS:
+            e.enabled = e.name in wanted
+
+    if skip:
+        unwanted = {n.strip() for n in skip.split(",") if n.strip()}
+        unknown = unwanted - names
+        if unknown:
+            raise SystemExit(f"Unbekannte Suchmuster: {sorted(unknown)}. Verfügbar: {sorted(names)}")
+        for e in EXTRACTORS:
+            if e.name in unwanted:
+                e.enabled = False
+
+    return [e for e in EXTRACTORS if e.enabled]
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="SDS/Callout Stage 1 – einlesen & parsen")
-    p.add_argument("xlsx", type=Path, help="Pfad zur Excel-Datei")
+    p.add_argument("xlsx", type=Path, nargs="?", help="Pfad zur Excel-Datei")
     p.add_argument("--sheet", default=0, help="Sheetname oder -index (Default 0)")
-    p.add_argument("--limit", type=int, default=20, help="Wie viele Zeilen ausgeben")
+    p.add_argument("--limit", type=int, default=20, help="Wie viele Zeilen ausgeben (-1 = alle)")
+    p.add_argument("--only", help="Nur diese Suchmuster aktivieren (kommagetrennt)")
+    p.add_argument("--skip", help="Diese Suchmuster deaktivieren (kommagetrennt)")
+    p.add_argument("--list", action="store_true", help="Verfügbare Suchmuster auflisten und beenden")
+    p.add_argument("--show-content", action="store_true", help="Original-Text mit ausgeben")
     args = p.parse_args()
 
-    records = load_records(args.xlsx, args.sheet)
+    if args.list:
+        print("Verfügbare Suchmuster:")
+        for e in EXTRACTORS:
+            print(f"  {e.name:12s}  {e.description}")
+        return
+
+    if not args.xlsx:
+        p.error("Pfad zur Excel-Datei fehlt (oder --list verwenden)")
+
+    active = configure_extractors(args.only, args.skip)
+    if not active:
+        raise SystemExit("Keine Suchmuster aktiv — nichts zu tun.")
+
+    records = load_records(args.xlsx, args.sheet, active)
     n_co = sum(1 for r in records if r.kind == "callout")
     n_sds = sum(1 for r in records if r.kind == "sds")
-    print(f"Gelesen: {len(records)} Datensätze ({n_co} Callouts, {n_sds} SDS)\n")
+    print(f"Gelesen: {len(records)} Datensätze ({n_co} Callouts, {n_sds} SDS)")
+    print(f"Aktive Suchmuster: {', '.join(e.name for e in active)}\n")
 
-    for r in records[: args.limit]:
+    limit = len(records) if args.limit < 0 else args.limit
+    for r in records[:limit]:
         ts = r.timestamp.isoformat(sep=" ", timespec="milliseconds") if r.timestamp else "-"
-        print(
-            f"[{r.kind:7s}] {ts}  "
-            f"PLZ={r.address.plz or '-':5s}  "
-            f"Str={r.address.street or '-'!r:40s}  "
-            f"Ort={r.address.city or '-'!r:25s}  "
-            f"Schlagwort={r.schlagwort or '-'!r}"
-        )
+        parts = [f"{name}={r.fields.get(name) or '-'!r}" for name in (e.name for e in active)]
+        line = f"[{r.kind:7s}] {ts}  " + "  ".join(parts)
+        if args.show_content:
+            line += f"\n           {r.content}"
+        print(line)
 
 
 if __name__ == "__main__":
