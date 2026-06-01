@@ -29,7 +29,7 @@ STREET_END_RE = re.compile(
 CITY_START_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*)"
 )
-SCHLAGWORT_CALLOUT_RE = re.compile(r"\|([BTI]#[^|]*)\|")
+SCHLAGWORT_CALLOUT_RE = re.compile(r"\|(#[TBI]\d{4}[a-zA-Z#\W]*)\|")
 SCHLAGWORT_SDS_RE = re.compile(r"\|SW:([BTI]#[^|]*)\|")
 
 
