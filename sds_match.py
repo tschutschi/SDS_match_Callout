@@ -26,6 +26,11 @@ CITY_START_RE = re.compile(
     r"([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*)"
 )
 
+# Schlagwort: zwischen zwei Pipes, beginnt mit B/T/I + '#'.
+# Callout: |B#...|   SDS: |SW:B#...|
+SCHLAGWORT_CALLOUT_RE = re.compile(r"\|([BTI]#[^|]*)\|")
+SCHLAGWORT_SDS_RE = re.compile(r"\|SW:([BTI]#[^|]*)\|")
+
 
 @dataclass
 class Address:
@@ -41,10 +46,17 @@ class Record:
     kind: str  # "callout" | "sds"
     content: str
     address: Address
+    schlagwort: str | None
 
 
 def classify(content: str) -> str:
     return "callout" if content.lstrip().startswith(CALLOUT_PREFIX) else "sds"
+
+
+def parse_schlagwort(content: str, kind: str) -> str | None:
+    pattern = SCHLAGWORT_SDS_RE if kind == "sds" else SCHLAGWORT_CALLOUT_RE
+    m = pattern.search(content)
+    return m.group(1) if m else None
 
 
 def parse_address(content: str) -> Address:
@@ -89,12 +101,14 @@ def load_records(xlsx_path: Path, sheet: str | int = 0) -> list[Record]:
         content = "" if pd.isna(row["content"]) else str(row["content"])
         if not content.strip():
             continue
+        kind = classify(content)
         records.append(
             Record(
                 timestamp=parse_timestamp(row["date"], row["time"]),
-                kind=classify(content),
+                kind=kind,
                 content=content,
                 address=parse_address(content),
+                schlagwort=parse_schlagwort(content, kind),
             )
         )
     return records
@@ -118,7 +132,8 @@ def main() -> None:
             f"[{r.kind:7s}] {ts}  "
             f"PLZ={r.address.plz or '-':5s}  "
             f"Str={r.address.street or '-'!r:40s}  "
-            f"Ort={r.address.city or '-'!r}"
+            f"Ort={r.address.city or '-'!r:25s}  "
+            f"Schlagwort={r.schlagwort or '-'!r}"
         )
 
 
