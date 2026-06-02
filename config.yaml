@@ -1,0 +1,14 @@
+classification:
+  callout_prefix: "IncomingCallout:"
+
+matching:
+  time_window_minutes: 120
+  score_threshold: 0.5
+
+# Gewichte je Suchmuster. Summe muss nicht 1.0 sein.
+# Muster ohne Eintrag = Gewicht 0 (zaehlt nicht fuer das Matching).
+weights:
+  plz: 0.40
+  schlagwort: 0.40
+  street: 0.15
+  city: 0.05

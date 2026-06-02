@@ -1,119 +1,25 @@
 #!/usr/bin/env python3
-"""Stage 1: Excel einlesen, Zeilen als SDS/Callout klassifizieren,
-und konfigurierbare Suchmuster auf den Inhalt anwenden.
+"""SDS/Callout — Excel einlesen, klassifizieren, Suchmuster anwenden,
+Records zu Fällen gruppieren (gewichteter Score, Zeitfenster).
 
-Neue Suchmuster:
-  1. Funktion definieren: extract_<name>(content: str, kind: str) -> str | None
-  2. In EXTRACTORS-Liste am Ende der Datei eintragen
-  3. Fertig — taucht automatisch in --list, --only, --skip und Output auf
+Logik & Mechanik. Suchmuster liegen in patterns/*.py, Klassifikator-
+Praefix + Gewichte + Zeitfenster in config.yaml.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 import pandas as pd
 
-CALLOUT_PREFIX = "IncomingCallout:"
-
-# ----- gemeinsame Regex (von mehreren Extraktoren genutzt) -----
-PLZ_RE = re.compile(r"\b(8(2|3)\d{3})\b")
-STREET_END_RE = re.compile(
-    r"([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*\s+\d+\s*[a-zA-Z]?)\s*$"
-)
-CITY_START_RE = re.compile(
-    r"([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*)"
-)
-SCHLAGWORT_CALLOUT_RE = re.compile(r"\|(#[TBIR]\d{4}[a-zA-ZÖöÄäß#\-\ ]*)\|+")
-SCHLAGWORT_SDS_RE = re.compile(r"\|+SW: (#[BTIR]\d{4}[a-zA-ZÖöÄäß#\-\ ]*)\|+")
+from config import load_config
+from extractor import Extractor, apply_extractors, classify, load_patterns
+from matcher import Case, Record, find_cases
 
 
-# ============================================================
-#  Extractor-Framework
-# ============================================================
-
-ExtractFn = Callable[[str, str], str | None]
-
-
-@dataclass
-class Extractor:
-    name: str
-    func: ExtractFn
-    description: str = ""
-    enabled: bool = True
-
-
-@dataclass
-class Record:
-    timestamp: datetime | None
-    kind: str  # "callout" | "sds"
-    content: str
-    fields: dict[str, str | None] = field(default_factory=dict)
-
-
-def classify(content: str) -> str:
-    return "callout" if content.lstrip().startswith(CALLOUT_PREFIX) else "sds"
-
-
-# ============================================================
-#  Einzelne Suchmuster (Extraktoren)
-# ============================================================
-
-def extract_plz(content: str, kind: str) -> str | None:
-    m = PLZ_RE.search(content)
-    return m.group(1) if m else None
-
-
-def extract_street(content: str, kind: str) -> str | None:
-    text = " ".join(content.split())
-    plz_match = PLZ_RE.search(text)
-    if not plz_match:
-        return None
-    before = text[: plz_match.start()].rstrip(" ,;:-")
-    m = STREET_END_RE.search(before)
-    return m.group(1).strip() if m else None
-
-
-def extract_city(content: str, kind: str) -> str | None:
-    text = " ".join(content.split())
-    plz_match = PLZ_RE.search(text)
-    if not plz_match:
-        return None
-    after = text[plz_match.end() :].lstrip(" ,;:-")
-    m = CITY_START_RE.match(after)
-    return m.group(1).strip() if m else None
-
-
-def extract_schlagwort(content: str, kind: str) -> str | None:
-    pattern = SCHLAGWORT_SDS_RE if kind == "sds" else SCHLAGWORT_CALLOUT_RE
-    m = pattern.search(content)
-    return m.group(1) if m else None
-
-
-# ============================================================
-#  Registry — hier neue Suchmuster eintragen
-# ============================================================
-
-EXTRACTORS: list[Extractor] = [
-    Extractor("plz",        extract_plz,        "Postleitzahl (82xxx)"),
-    Extractor("street",     extract_street,     "Straße + Hausnummer vor der PLZ"),
-    Extractor("city",       extract_city,       "Ortsname nach der PLZ"),
-    Extractor("schlagwort", extract_schlagwort, "Schlagwort zwischen Pipes (B#/T#/I#)"),
-]
-
-
-def apply_extractors(content: str, kind: str, extractors: list[Extractor]) -> dict[str, str | None]:
-    return {e.name: e.func(content, kind) for e in extractors if e.enabled}
-
-
-# ============================================================
-#  Excel laden
-# ============================================================
+# ---------- Excel ----------
 
 def parse_timestamp(date_val, time_val) -> datetime | None:
     if pd.isna(date_val) or pd.isna(time_val):
@@ -130,8 +36,9 @@ def parse_timestamp(date_val, time_val) -> datetime | None:
 
 def load_records(
     xlsx_path: Path,
-    sheet: str | int,
+    sheet,
     extractors: list[Extractor],
+    callout_prefix: str,
 ) -> list[Record]:
     df = pd.read_excel(xlsx_path, sheet_name=sheet, header=None, dtype=str)
     df = df.iloc[:, :3]
@@ -142,7 +49,7 @@ def load_records(
         content = "" if pd.isna(row["content"]) else str(row["content"])
         if not content.strip():
             continue
-        kind = classify(content)
+        kind = classify(content, callout_prefix)
         records.append(
             Record(
                 timestamp=parse_timestamp(row["date"], row["time"]),
@@ -154,19 +61,21 @@ def load_records(
     return records
 
 
-# ============================================================
-#  CLI
-# ============================================================
+# ---------- CLI Helpers ----------
 
-def configure_extractors(only: str | None, skip: str | None) -> list[Extractor]:
-    names = {e.name for e in EXTRACTORS}
+def configure_extractors(
+    extractors: list[Extractor],
+    only: str | None,
+    skip: str | None,
+) -> list[Extractor]:
+    names = {e.name for e in extractors}
 
     if only:
         wanted = {n.strip() for n in only.split(",") if n.strip()}
         unknown = wanted - names
         if unknown:
             raise SystemExit(f"Unbekannte Suchmuster: {sorted(unknown)}. Verfügbar: {sorted(names)}")
-        for e in EXTRACTORS:
+        for e in extractors:
             e.enabled = e.name in wanted
 
     if skip:
@@ -174,76 +83,137 @@ def configure_extractors(only: str | None, skip: str | None) -> list[Extractor]:
         unknown = unwanted - names
         if unknown:
             raise SystemExit(f"Unbekannte Suchmuster: {sorted(unknown)}. Verfügbar: {sorted(names)}")
-        for e in EXTRACTORS:
+        for e in extractors:
             if e.name in unwanted:
                 e.enabled = False
 
-    return [e for e in EXTRACTORS if e.enabled]
+    return [e for e in extractors if e.enabled]
 
+
+def _fmt_ts(ts) -> str:
+    return ts.isoformat(sep=" ", timespec="milliseconds") if ts else "-"
+
+
+# ---------- Output ----------
+
+def print_cases(
+    cases: list[Case],
+    active: list[Extractor],
+    show_content: bool,
+    only_multi: bool,
+) -> None:
+    shown = 0
+    case_no = 0
+    for c in cases:
+        if only_multi and len(c.records) < 2:
+            continue
+        case_no += 1
+        shown += 1
+        n_sds = sum(1 for r in c.records if r.kind == "sds")
+        n_co = sum(1 for r in c.records if r.kind == "callout")
+        parts = []
+        if n_co:
+            parts.append(f"{n_co} Callout" + ("s" if n_co != 1 else ""))
+        if n_sds:
+            parts.append(f"{n_sds} SDS")
+        head = ", ".join(parts) if parts else "0"
+        suffix = "" if len(c.records) > 1 else ", ohne Gegenstück"
+        print(
+            f"\nFall #{case_no}  {len(c.records)} Record(s) ({head}{suffix})  "
+            f"score_max={c.score_max:.2f}  score_avg={c.score_avg:.2f}"
+        )
+        for r in c.records:
+            field_parts = [
+                f"{e.name}={r.fields.get(e.name) or '-'!r}" for e in active
+            ]
+            print(f"  [{r.kind:7s}] {_fmt_ts(r.timestamp)}  " + "  ".join(field_parts))
+            if show_content:
+                print(f"           {r.content}")
+    if only_multi and shown == 0:
+        print("\n(Keine Fälle mit >= 2 Records gefunden.)")
+
+
+def print_stats(records: list[Record], active: list[Extractor]) -> None:
+    n_co = sum(1 for r in records if r.kind == "callout")
+    n_sds = sum(1 for r in records if r.kind == "sds")
+    print("\nMatch-Statistik (pro Suchmuster):")
+    print(f"  {'Muster':12s}  {'Callout':>14s}  {'SDS':>14s}  {'Gesamt':>14s}")
+    for e in active:
+        co_hit = sum(1 for r in records if r.kind == "callout" and r.fields.get(e.name))
+        sds_hit = sum(1 for r in records if r.kind == "sds" and r.fields.get(e.name))
+        total_hit = co_hit + sds_hit
+        co_str = f"{co_hit}/{n_co}" if n_co else "-"
+        sds_str = f"{sds_hit}/{n_sds}" if n_sds else "-"
+        tot_str = f"{total_hit}/{len(records)}"
+        print(f"  {e.name:12s}  {co_str:>14s}  {sds_str:>14s}  {tot_str:>14s}")
+
+
+# ---------- Main ----------
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="SDS/Callout Stage 1 – einlesen & parsen")
+    p = argparse.ArgumentParser(description="SDS/Callout — Fälle gruppieren")
     p.add_argument("xlsx", type=Path, nargs="?", help="Pfad zur Excel-Datei")
     p.add_argument("--sheet", default=0, help="Sheetname oder -index (Default 0)")
-    p.add_argument("--limit", type=int, default=20, help="Wie viele Zeilen ausgeben (-1 = alle)")
+    p.add_argument("--config", type=Path, default=Path("config.yaml"))
     p.add_argument("--only", help="Nur diese Suchmuster aktivieren (kommagetrennt)")
     p.add_argument("--skip", help="Diese Suchmuster deaktivieren (kommagetrennt)")
     p.add_argument("--list", action="store_true", help="Verfügbare Suchmuster auflisten und beenden")
     p.add_argument("--show-content", action="store_true", help="Original-Text mit ausgeben")
+    p.add_argument("--threshold", type=float, help="Score-Schwellwert (überschreibt Config)")
+    p.add_argument("--time-window", type=int, help="Zeitfenster Minuten (überschreibt Config)")
+    p.add_argument("--only-multi", action="store_true", help="Nur Fälle mit >=2 Records anzeigen")
     args = p.parse_args()
+
+    extractors = load_patterns()
 
     if args.list:
         print("Verfügbare Suchmuster:")
-        for e in EXTRACTORS:
+        for e in extractors:
             print(f"  {e.name:12s}  {e.description}")
         return
 
     if not args.xlsx:
         p.error("Pfad zur Excel-Datei fehlt (oder --list verwenden)")
 
-    active = configure_extractors(args.only, args.skip)
+    cfg = load_config(args.config if args.config.exists() else None)
+    threshold = args.threshold if args.threshold is not None else cfg.score_threshold
+    window = args.time_window if args.time_window is not None else cfg.time_window_minutes
+
+    active = configure_extractors(extractors, args.only, args.skip)
     if not active:
         raise SystemExit("Keine Suchmuster aktiv — nichts zu tun.")
 
-    records = load_records(args.xlsx, args.sheet, active)
+    known = {e.name for e in extractors}
+    unknown_w = set(cfg.weights) - known
+    if unknown_w:
+        print(f"Warnung: Gewichte für unbekannte Suchmuster: {sorted(unknown_w)}")
+    inactive_w = (set(cfg.weights) & known) - {e.name for e in active}
+    if inactive_w:
+        print(f"Hinweis: Gewichte für deaktivierte Suchmuster werden ignoriert: {sorted(inactive_w)}")
+
+    effective_weights = {n: w for n, w in cfg.weights.items() if n in {e.name for e in active}}
+
+    records = load_records(args.xlsx, args.sheet, active, cfg.callout_prefix)
     n_co = sum(1 for r in records if r.kind == "callout")
     n_sds = sum(1 for r in records if r.kind == "sds")
     print(f"Gelesen: {len(records)} Datensätze ({n_co} Callouts, {n_sds} SDS)")
-    print(f"Aktive Suchmuster: {', '.join(e.name for e in active)}\n")
+    print(f"Aktive Suchmuster: {', '.join(e.name for e in active)}")
+    print(f"Zeitfenster: {window} min   Schwellwert: {threshold:.2f}")
 
-    limit = len(records) if args.limit < 0 else args.limit
-    shown = records[:limit]
-    for r in shown:
-        ts = r.timestamp.isoformat(sep=" ", timespec="milliseconds") if r.timestamp else "-"
-        parts = [f"{name}={r.fields.get(name) or '-'!r}" for name in (e.name for e in active)]
-        line = f"[{r.kind:7s}] {ts}  " + "  ".join(parts)
-        if args.show_content:
-            line += f"\n           {r.content}"
-        print(line)
-    if len(records) > len(shown):
-        print(f"... ({len(records) - len(shown)} weitere Zeilen — mit --limit -1 alle anzeigen)")
+    cases = find_cases(
+        records,
+        extractors=active,
+        weights=effective_weights,
+        time_window_minutes=window,
+        score_threshold=threshold,
+    )
 
-    # ----- Statistik je Suchmuster, getrennt nach SDS/Callout -----
-    print("\nMatch-Statistik (pro Suchmuster):")
-    print(f"  {'Muster':12s}  {'Callout':>14s}  {'SDS':>14s}  {'Gesamt':>14s}")
-    for e in active:
-        co_hit = sum(1 for r in records if r.kind == "callout" and r.fields.get(e.name))
-        sds_hit = sum(1 for r in records if r.kind == "sds"     and r.fields.get(e.name))
-        total_hit = co_hit + sds_hit
-        co_str  = f"{co_hit}/{n_co}"  if n_co  else "-"
-        sds_str = f"{sds_hit}/{n_sds}" if n_sds else "-"
-        tot_str = f"{total_hit}/{len(records)}"
-        print(f"  {e.name:12s}  {co_str:>14s}  {sds_str:>14s}  {tot_str:>14s}")
+    multi = sum(1 for c in cases if len(c.records) >= 2)
+    single = sum(1 for c in cases if len(c.records) == 1)
+    print(f"Fälle: {len(cases)} ({multi} mit mehreren Records, {single} Singletons)")
 
-    # ----- Records ohne jeden Match (Hinweis fuer Regex-Tuning) -----
-    no_match = [r for r in records if not any(r.fields.values())]
-    if no_match:
-        print(f"\n{len(no_match)} Datensätze ohne irgendeinen Treffer:")
-        for r in no_match[:10]:
-            ts = r.timestamp.isoformat(sep=" ", timespec="milliseconds") if r.timestamp else "-"
-            print(f"  [{r.kind:7s}] {ts}  {r.content[:120]}")
-        if len(no_match) > 10:
-            print(f"  ... ({len(no_match) - 10} weitere)")
+    print_cases(cases, active, args.show_content, args.only_multi)
+    print_stats(records, active)
 
 
 if __name__ == "__main__":
