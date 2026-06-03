@@ -13,7 +13,7 @@ CITY_CALLOUT_RE = re.compile(
 
 # SDS: kein PLZ-Kontext. Hier Deine SDS-spezifische Regex eintragen.
 # Solange Platzhalter (matcht nie), gibt es fuer SDS-Zeilen keine Stadt.
-CITY_SDS_RE = re.compile(r"(?!x)x")  # TODO: SDS-Ort-Regex eintragen
+CITY_SDS_RE = re.compile(r"\|\|OT: ([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄÖÜäöüß.\-]+)*)")  # TODO: SDS-Ort-Regex eintragen
 
 
 def _extract(content: str, kind: str) -> str | None:
