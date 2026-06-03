@@ -102,6 +102,8 @@ def print_cases(
     show_content: bool,
     only_multi: bool,
 ) -> None:
+    inline = [e for e in active if e.display_mode == "inline"]
+    extra = [e for e in active if e.display_mode == "extra_line"]
     shown = 0
     case_no = 0
     for c in cases:
@@ -124,9 +126,13 @@ def print_cases(
         )
         for r in c.records:
             field_parts = [
-                f"{e.name}={r.fields.get(e.name) or '-'!r}" for e in active
+                f"{e.name}={r.fields.get(e.name) or '-'!r}" for e in inline
             ]
             print(f"  [{r.kind:7s}] {_fmt_ts(r.timestamp)}  " + "  ".join(field_parts))
+            for e in extra:
+                val = r.fields.get(e.name)
+                if val:
+                    print(f"           {e.name}: {val}")
             if show_content:
                 print(f"           {r.content}")
     if only_multi and shown == 0:
