@@ -37,6 +37,10 @@ def pair_score(
         e = by_name.get(name)
         if e is None:
             continue
+        # Display-only Patterns (z.B. einsatzmittel) niemals werten,
+        # auch wenn versehentlich ein Gewicht in der Config steht.
+        if e.display_mode != "inline":
+            continue
         va, vb = a.fields.get(name), b.fields.get(name)
         if not va or not vb:
             continue

@@ -9,6 +9,8 @@ matching:
 # Muster ohne Eintrag = Gewicht 0 (zaehlt nicht fuer das Matching).
 weights:
   plz: 0.40
-  schlagwort: 0.40
-  street: 0.15
+  schlagwort: 0.30
+  stichwort: 0.15
+  street: 0.10
   city: 0.05
+  # einsatzmittel: nur Anzeige — kein Gewicht (wird ohnehin ignoriert).

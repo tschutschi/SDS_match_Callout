@@ -6,10 +6,11 @@ import importlib
 import pkgutil
 import re
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Callable, Literal
 
 ExtractFn = Callable[[str, str], str | None]
 NormalizeFn = Callable[[str], str]
+DisplayMode = Literal["inline", "extra_line"]
 
 
 _STR_RE = re.compile(r"\bstr\.?\b", flags=re.IGNORECASE)
@@ -34,6 +35,10 @@ class Extractor:
     normalize: NormalizeFn = field(default=default_normalize)
     order: int = 100
     enabled: bool = True
+    # "inline": Wert in der Record-Zeile bei den uebrigen Feldern.
+    # "extra_line": Wert als separate, eingerueckte Zeile unter dem Record;
+    # zaehlt nicht zum pair_score (auch wenn ein Gewicht gesetzt wurde).
+    display_mode: DisplayMode = "inline"
 
 
 def load_patterns() -> list[Extractor]:
