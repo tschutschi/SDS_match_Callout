@@ -8,27 +8,19 @@ import re
 
 from extractor import Extractor
 
-# Eine Capture-Gruppe, '||' ausgeklammert, Alternativen nicht-fangend (?:...).
-# findall liefert alle Einsatzmittel im Callout — sie werden zusammengefuehrt.
-EINSATZMITTEL_CALLOUT_RE = re.compile(
-    r"\|\|("
-    r"(?:\w{2}\s\w+\s\d/?\d+/\d)"
-    r"|(?:\w{2}\s\w+\s?\w+\s\w+\s\d/?\d?)"
-    r")"
-)
+# Einsatzmittel stehen als ||Wert||Wert||...||-Block im Callout.
+# Wir parsen NICHT die innere Struktur eines Einsatzmittels (das bricht, sobald
+# ein Umlaut aus der Datenquelle fehlt, z.B. "TÖL" -> "T L"), sondern ziehen
+# robust alles heraus, was zwischen zwei doppelten Pipes steht.
+# Lookahead (?=\|\|) stellt sicher, dass nur '||'-umschlossene Werte greifen und
+# kein nachfolgender Freitext faelschlich mitgenommen wird.
+EINSATZMITTEL_CALLOUT_RE = re.compile(r"\|\|\s*([^|]+?)\s*(?=\|\|)")
 
 
 def _extract(content: str, kind: str) -> str | None:
     if kind != "callout":
         return None
-    matches = EINSATZMITTEL_CALLOUT_RE.findall(content)
-    # findall kann pro Treffer ein str oder ein Tupel (mehrere Gruppen) liefern.
-    values = []
-    for m in matches:
-        val = next((g for g in m if g), "") if isinstance(m, tuple) else m
-        val = val.strip()
-        if val:
-            values.append(val)
+    values = [v.strip() for v in EINSATZMITTEL_CALLOUT_RE.findall(content) if v.strip()]
     return " | ".join(values) if values else None
 
 
