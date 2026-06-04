@@ -8,15 +8,20 @@ import re
 
 from extractor import Extractor
 
-# Erste Capture-Gruppe = der gesamte (Leerzeichen-getrennte) Wert-String.
-EINSATZMITTEL_CALLOUT_RE = re.compile(r"(?!x)x")  # TODO: Callout-Einsatzmittel-Regex eintragen
+# Einsatzmittel stehen als ||Wert||Wert||...||-Block im Callout.
+# Wir parsen NICHT die innere Struktur eines Einsatzmittels (das bricht, sobald
+# ein Umlaut aus der Datenquelle fehlt, z.B. "TÖL" -> "T L"), sondern ziehen
+# robust alles heraus, was zwischen zwei doppelten Pipes steht.
+# Lookahead (?=\|\|) stellt sicher, dass nur '||'-umschlossene Werte greifen und
+# kein nachfolgender Freitext faelschlich mitgenommen wird.
+EINSATZMITTEL_CALLOUT_RE = re.compile(r"\|\|\s*([^|]+?)\s*(?=\|\|)")
 
 
 def _extract(content: str, kind: str) -> str | None:
     if kind != "callout":
         return None
-    m = EINSATZMITTEL_CALLOUT_RE.search(content)
-    return m.group(1).strip() if m else None
+    values = [v.strip() for v in EINSATZMITTEL_CALLOUT_RE.findall(content) if v.strip()]
+    return " | ".join(values) if values else None
 
 
 EXTRACTOR = Extractor(
