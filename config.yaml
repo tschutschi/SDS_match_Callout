@@ -8,9 +8,10 @@ matching:
 # Gewichte je Suchmuster. Summe muss nicht 1.0 sein.
 # Muster ohne Eintrag = Gewicht 0 (zaehlt nicht fuer das Matching).
 weights:
-  plz: 0.40
-  schlagwort: 0.30
+  plz: 0.25
+  schlagwort: 0.25
   stichwort: 0.15
-  street: 0.10
-  city: 0.05
+  street: 0.15
+  city: 0.10
+  house_number: 0.10
   # einsatzmittel: nur Anzeige — kein Gewicht (wird ohnehin ignoriert).

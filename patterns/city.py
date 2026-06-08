@@ -1,6 +1,4 @@
-"""Ortsname — eigenständige Regex je kind, ohne Abhängigkeit von patterns.plz."""
-
-import re
+"""Ortsname — aus strukturierter Adresse (SDS EO-Block oder Callout ||PLZ Ort||)."""
 
 from extractor import Extractor
 
@@ -17,14 +15,12 @@ CITY_SDS_RE = re.compile(r"\|\|OT: ([A-Za-zÄÖÜäöüß.\-]+(?:[ \-][A-Za-zÄ�
 
 
 def _extract(content: str, kind: str) -> str | None:
-    pattern = CITY_SDS_RE if kind == "sds" else CITY_CALLOUT_RE
-    m = pattern.search(content)
-    return m.group(1).strip() if m else None
+    return parse_address(content, kind)["ort"]
 
 
 EXTRACTOR = Extractor(
     name="city",
     func=_extract,
-    description="Ortsname (Callout: nach PLZ, SDS: eigene Regex)",
+    description="Ort — SDS aus EO:-Block, Callout aus ||PLZ Ort||-Block (links vom ' - ')",
     order=30,
 )
