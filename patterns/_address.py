@@ -2,6 +2,8 @@
 
 SDS-Format:
     ||EO: 82515 Wolfratshausen; Margeritenstraße; 22a||
+    Der Ort kann zusätzlich in einem eigenen ||OT: <Ort>||-Block stehen;
+    falls vorhanden, hat dieser Vorrang vor dem Ort aus dem EO-Block.
 
 Callout-Format:
     ||82515 Wolfratshausen - Wolfratshausen||Margeritenstraße 22a  og 2||
@@ -31,6 +33,12 @@ _SDS_ADDRESS_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Separater Ort-Block in der SDS: ||OT: Wolfratshausen||
+_SDS_OT_RE = re.compile(
+    r"\|\|\s*OT:\s*([^|]+?)\s*\|\|",
+    re.IGNORECASE,
+)
+
 # Callout-Vollblock: ||PLZ Ort - Gemeinde||Straße Hausnummer  Zusatz||
 # Strassen-Block muss DIREKT nach dem PLZ-Ort-Block kommen — sonst koennten
 # Einsatzmittel-Blöcke wie '||FL Sleh 11/1||' faelschlich als Strasse gelten.
@@ -57,10 +65,15 @@ def _co_ort_from_raw(ort_raw: str) -> str:
 def parse_address(content: str, kind: str) -> dict[str, str | None]:
     """Liefert {'plz', 'ort', 'strasse', 'hausnummer'} oder Felder mit None."""
     if kind == "sds":
+        out = dict(_EMPTY)
         m = _SDS_ADDRESS_RE.search(content)
-        if not m:
-            return dict(_EMPTY)
-        return {k: v.strip() for k, v in m.groupdict().items()}
+        if m:
+            out = {k: v.strip() for k, v in m.groupdict().items()}
+        # Separater ||OT: ...||-Block hat Vorrang fuer den Ort, falls vorhanden.
+        ot = _SDS_OT_RE.search(content)
+        if ot:
+            out["ort"] = ot.group(1).strip()
+        return out
 
     if kind == "callout":
         out = dict(_EMPTY)
