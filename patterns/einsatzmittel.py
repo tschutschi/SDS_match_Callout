@@ -29,6 +29,7 @@ def _extract(content: str, kind: str) -> str | None:
     addr = parse_address(content, kind)
     plz = addr["plz"]
     strasse = addr["strasse"]
+    objekt = addr["objekt"]
 
     values: list[str] = []
     for raw in PIPE_BLOCKS_RE.findall(content):
@@ -40,6 +41,9 @@ def _extract(content: str, kind: str) -> str | None:
             continue
         # Strassen-Block ueberspringen (z.B. 'Margeritenstraße 22a  og 2')
         if strasse and token.startswith(strasse):
+            continue
+        # Objekt-Block ueberspringen (z.B. 'Kirche')
+        if objekt and token == objekt:
             continue
         # Schlagwort-Block ueberspringen (z.B. '#T2410#Rettung#Wohnung öffnen akut')
         if SCHLAGWORT_TOKEN_RE.match(token):

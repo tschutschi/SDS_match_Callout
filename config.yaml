@@ -10,8 +10,9 @@ matching:
 weights:
   plz: 0.25
   schlagwort: 0.25
-  stichwort: 0.15
+  stichwort: 0.10
   street: 0.15
-  city: 0.10
+  city: 0.05
   house_number: 0.10
+  objekt: 0.10
   # einsatzmittel: nur Anzeige — kein Gewicht (wird ohnehin ignoriert).
