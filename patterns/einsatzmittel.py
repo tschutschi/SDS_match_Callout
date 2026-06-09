@@ -12,9 +12,14 @@ from patterns._address import parse_address
 # Einsatzmittel stehen als ||Wert||Wert||...||-Sequenz im Callout.
 # Wir parsen NICHT die innere Struktur eines Einsatzmittels (das bricht, sobald
 # ein Umlaut fehlt, z.B. 'TÖL' -> 'T L'), sondern ziehen robust alle Werte
-# zwischen doppelten Pipes heraus und filtern dann die Adress-Bloecke aus.
+# zwischen doppelten Pipes heraus und filtern dann die Fremd-Bloecke aus
+# (Adresse + Schlagwort), die ebenfalls von '||' umschlossen sind.
 # Lookahead (?=\|\|) erlaubt ueberlappende Matches durch '||'-Trennungen.
 PIPE_BLOCKS_RE = re.compile(r"\|\|\s*([^|]+?)\s*(?=\|\|)")
+
+# Schlagwort-Signatur (z.B. '#T2410#Rettung#...') — solche Bloecke sind
+# keine Einsatzmittel und werden uebersprungen.
+SCHLAGWORT_TOKEN_RE = re.compile(r"^#[TBIR]\d{4}")
 
 
 def _extract(content: str, kind: str) -> str | None:
@@ -35,6 +40,9 @@ def _extract(content: str, kind: str) -> str | None:
             continue
         # Strassen-Block ueberspringen (z.B. 'Margeritenstraße 22a  og 2')
         if strasse and token.startswith(strasse):
+            continue
+        # Schlagwort-Block ueberspringen (z.B. '#T2410#Rettung#Wohnung öffnen akut')
+        if SCHLAGWORT_TOKEN_RE.match(token):
             continue
         values.append(token)
     return " | ".join(values) if values else None
